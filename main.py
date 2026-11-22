@@ -1,42 +1,60 @@
-from fastapi import FastAPI
-import sys
-sys.path.append('..')  # le dice a Python que busque un nivel arriba
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 
+from src.excepciones import (
+    MontoNegativoError,
+    SaldoInsuficienteError,
+    TipoTransaccionInvalidaError,
+)
 from src.transacciones import GestorFinanzas
-from src.database import crear_tabla_transacciones
-from pydantic import BaseModel
 
-app = FastAPI()
-crear_tabla_transacciones()  # Asegura que la tabla exista al iniciar la aplicación
-gestor = GestorFinanzas()  # Inicializa el gestor para asegurarse de que la tabla se cree
+app = FastAPI(
+    title="Finanzas API",
+    description="API REST para registrar ingresos, gastos y consultar el balance.",
+    version="1.0.0",
+)
+gestor = GestorFinanzas()
 
-class Transaccion(BaseModel):
-    descripcion: str
-    monto: float
-    tipo: str  # 'ingreso' o 'gasto'
 
-@app.post("/transacciones/ingreso")
-def agregar_ingreso(transaccion: Transaccion):
-    gestor.agregar_ingreso(transaccion.monto, transaccion.descripcion)
-    return {"mensaje": "Ingreso agregado exitosamente"}
+class TransaccionEntrada(BaseModel):
+    descripcion: str = Field(min_length=1, max_length=200)
+    monto: float = Field(gt=0, allow_inf_nan=False)
 
-@app.post("/transacciones/gasto")
-def agregar_gasto(transaccion: Transaccion):
-    gestor.agregar_gasto(transaccion.monto, transaccion.descripcion)
-    return {"mensaje": "Gasto agregado exitosamente"}
 
-@app.get("/transacciones/")
-def obtener_transacciones():
-    transacciones = gestor.obtener_transacciones()
-    return {"transacciones": transacciones}
+@app.get("/", tags=["general"])
+def inicio():
+    return {"mensaje": "Finanzas API está funcionando", "docs": "/docs"}
 
-@app.get("/balance/")
+
+@app.post("/transacciones/ingreso", status_code=201, tags=["transacciones"])
+def agregar_ingreso(transaccion: TransaccionEntrada):
+    try:
+        transaction_id = gestor.agregar_ingreso(
+            transaccion.monto, transaccion.descripcion
+        )
+        return {"mensaje": "Ingreso agregado exitosamente", "id": transaction_id}
+    except (MontoNegativoError, TipoTransaccionInvalidaError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/transacciones/gasto", status_code=201, tags=["transacciones"])
+def agregar_gasto(transaccion: TransaccionEntrada):
+    try:
+        transaction_id = gestor.agregar_gasto(
+            transaccion.monto, transaccion.descripcion
+        )
+        return {"mensaje": "Gasto agregado exitosamente", "id": transaction_id}
+    except SaldoInsuficienteError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (MontoNegativoError, TipoTransaccionInvalidaError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/transacciones/", tags=["transacciones"])
+def listar_transacciones():
+    return {"transacciones": gestor.obtener_transacciones()}
+
+
+@app.get("/balance/", tags=["balance"])
 def obtener_balance():
-    balance = gestor.obtener_balance()
-    return {"balance": balance}
-
-if __name__ == "__main__":
-    pass
-
-
-
+    return {"balance": gestor.obtener_balance()}
